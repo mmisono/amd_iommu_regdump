@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# NOTE: run this script with sudo
+
 import os
 import mmap
+import subprocess
+
 import numpy as np
 
 
 class BitField():
+
     def __init__(self, value, size, fields=[], description="BitField"):
         self.value = int(value)
         self.size = size
@@ -40,6 +45,7 @@ class BitField():
 
 
 class MMIO():
+
     def __init__(self, base_addr, length=0x1000, devmem='/dev/mem'):
         self.length = length
         fd = os.open(devmem, os.O_RDWR | os.O_SYNC)
@@ -176,13 +182,47 @@ REGS = {
 }
 
 
-def main(base_addr):
-    print(f"IOMMU Base Address = 0x{base_addr:X}")
+def get_iommu_pci_bdf():
+    bdfs = []
+    p = subprocess.run(["lspci"], capture_output=True, encoding="utf-8")
+    for line in p.stdout.split("\n"):
+        if line.find("IOMMU") != -1:
+            bdf = line.split(" ")[0]
+            bdfs.append(bdf)
+    return bdfs
 
-    mem = MMIO(base_addr)
-    for offset, size, description, fields in REGS.values():
-        value = mem.read(offset, size)
-        print(BitField(value, size, fields, description))
+
+def get_iommu_base_addr(bdf):
+    p = subprocess.run(["lspci", "-s", f"{bdf}", "-xxx"],
+                       capture_output=True,
+                       encoding="utf-8")
+    for line in p.stdout.split("\n"):
+        if line.startswith("40: "):
+            bytes_ = line.split(" ")[1:]
+            addr = int(bytes_[7], 16) << 8 | int(bytes_[6], 16)
+            addr <<= 16
+            break
+    return addr
+
+
+def get_iommu_bdf_addr():
+    r = []
+    bdfs = get_iommu_pci_bdf()
+    for bdf in bdfs:
+        addr = get_iommu_base_addr(bdf)
+        r.append((bdf, addr))
+    return r
+
+
+def main():
+    info = get_iommu_bdf_addr()
+    for bdf, addr in info:
+        print(f"{bdf} {addr:#x}")
+
+        mem = MMIO(addr)
+        for offset, size, description, fields in REGS.values():
+            value = mem.read(offset, size)
+            print(BitField(value, size, fields, description))
 
 
 if __name__ == "__main__":
